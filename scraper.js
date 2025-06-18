@@ -1,216 +1,99 @@
+// scraper.js
+
 const express = require('express');
 const puppeteer = require('puppeteer');
 const axios = require('axios');
 
+// --- Configuración ---
 const app = express();
+// Google Cloud Run provee el puerto a través de la variable de entorno PORT
 const PORT = process.env.PORT || 8080;
-
-// URL de la página a scrapear
-const TARGET_URL = 'https://www.corteconstitucional.gov.co/comunicados';
-// URL del webhook
+const SCRAPE_URL = 'https://www.corteconstitucional.gov.co/comunicados';
 const WEBHOOK_URL = 'https://lab.irradialab.com/webhook/recibir-comunicados';
 
+// --- Endpoint Principal ---
 app.get('/', async (req, res) => {
+    console.log('Solicitud GET recibida en la ruta raíz. Iniciando proceso de scraping...');
+
     let browser = null;
-    
     try {
-        console.log('🚀 Iniciando proceso de scraping...');
-        
-        // Iniciar Puppeteer
-        console.log('📱 Iniciando Puppeteer en modo headless...');
+        // 1. Iniciar Puppeteer
+        // Las flags '--no-sandbox' y '--disable-setuid-sandbox' son esenciales para correr en un entorno Docker/Cloud Run
+        console.log('Iniciando Puppeteer...');
         browser = await puppeteer.launch({
             headless: true,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--disable-gpu'
-            ]
+                '--disable-dev-shm-usage', // Recomendado para entornos con memoria limitada
+                '--disable-gpu', // A menudo no es necesario en el servidor
+            ],
         });
-        
         const page = await browser.newPage();
-        
-        // Configurar user agent para evitar detección de bot
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-        
-        // Navegar a la página
-        console.log('🌐 Navegando a la página de comunicados...');
-        await page.goto(TARGET_URL, {
-            waitUntil: 'networkidle0',
-            timeout: 30000
+
+        // Para simular un navegador real y evitar bloqueos
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+
+
+        // 2. Navegar a la página
+        console.log(`Navegando a: ${SCRAPE_URL}`);
+        await page.goto(SCRAPE_URL, {
+            waitUntil: 'networkidle0', // Espera a que no haya actividad de red por 500ms
+            timeout: 60000 // Aumenta el timeout a 60 segundos
         });
-        
-        console.log('⏳ Esperando a que la página cargue completamente...');
-        // Esperar un poco más para asegurar que el contenido dinámico se cargue
-        await page.waitForTimeout(3000);
-        
-        // Extraer contenido
-        console.log('📄 Extrayendo contenido de la página...');
-        const extractedData = await page.evaluate(() => {
-            // Intentar extraer comunicados de manera estructurada
-            const comunicados = [];
-            
-            // Buscar elementos que puedan contener comunicados
-            const possibleSelectors = [
-                '.comunicado',
-                '.noticia',
-                '.item',
-                '.entry',
-                'article',
-                '.content-item',
-                '.news-item'
-            ];
-            
-            let foundStructured = false;
-            
-            for (const selector of possibleSelectors) {
-                const elements = document.querySelectorAll(selector);
-                if (elements.length > 0) {
-                    console.log(`Encontrados ${elements.length} elementos con selector: ${selector}`);
-                    foundStructured = true;
-                    
-                    elements.forEach((element, index) => {
-                        const titulo = element.querySelector('h1, h2, h3, h4, .titulo, .title')?.textContent?.trim();
-                        const fecha = element.querySelector('.fecha, .date, time, .fecha-publicacion')?.textContent?.trim();
-                        const enlace = element.querySelector('a')?.href;
-                        
-                        if (titulo || fecha || enlace) {
-                            comunicados.push({
-                                titulo: titulo || `Comunicado ${index + 1}`,
-                                fecha: fecha || 'Fecha no disponible',
-                                enlace: enlace || null,
-                                contenido: element.textContent?.trim().substring(0, 200) + '...'
-                            });
-                        }
-                    });
-                    break;
-                }
-            }
-            
-            // Si no se encontró estructura, extraer todo el contenido del body
-            if (!foundStructured || comunicados.length === 0) {
-                console.log('No se encontró estructura específica, extrayendo contenido general...');
-                const bodyContent = document.body.textContent?.trim();
-                return {
-                    tipo: 'contenido_general',
-                    contenido: bodyContent,
-                    comunicados: []
-                };
-            }
-            
-            return {
-                tipo: 'comunicados_estructurados',
-                comunicados: comunicados,
-                total: comunicados.length
-            };
+        console.log('Página cargada completamente.');
+
+        // 3. Extraer el contenido
+        // Como la estructura es desconocida, extraemos todo el texto visible del body.
+        // Esto es más robusto ante cambios en el HTML.
+        console.log('Extrayendo contenido de la página...');
+        const pageContent = await page.evaluate(() => {
+            // Se usa document.body.innerText para obtener solo el texto visible por el usuario
+            return document.body.innerText;
         });
-        
-        console.log(`✅ Contenido extraído: ${extractedData.tipo}`);
-        if (extractedData.tipo === 'comunicados_estructurados') {
-            console.log(`📊 Total de comunicados encontrados: ${extractedData.total}`);
-        }
-        
-        // Preparar payload para el webhook
-        let payload;
-        if (extractedData.tipo === 'comunicados_estructurados' && extractedData.comunicados.length > 0) {
-            payload = {
-                comunicados: extractedData.comunicados,
-                total: extractedData.total,
-                fuente: TARGET_URL,
-                timestamp: new Date().toISOString()
-            };
+
+        if (!pageContent || pageContent.trim() === '') {
+            console.warn('Advertencia: El contenido extraído está vacío.');
         } else {
-            payload = {
-                contenido: extractedData.contenido,
-                fuente: TARGET_URL,
-                timestamp: new Date().toISOString()
-            };
+            console.log(`Contenido extraído exitosamente (longitud: ${pageContent.length} caracteres).`);
         }
-        
-        // Enviar datos al webhook
-        console.log('📤 Enviando datos al webhook...');
-        const webhookResponse = await axios.post(WEBHOOK_URL, payload, {
-            headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'Scraper-Corte-Constitucional/1.0'
-            },
-            timeout: 10000
-        });
-        
-        console.log(`✅ Webhook respondió con status: ${webhookResponse.status}`);
-        
-        // Cerrar el navegador
-        console.log('🔒 Cerrando navegador...');
-        await browser.close();
-        
-        // Responder al cliente
+
+        // 4. Enviar datos al Webhook
+        console.log(`Enviando datos al webhook: ${WEBHOOK_URL}`);
+        const payload = {
+            contenido: pageContent,
+        };
+        await axios.post(WEBHOOK_URL, payload);
+        console.log('Datos enviados al webhook exitosamente.');
+
+        // 5. Responder a la solicitud HTTP
         res.status(200).json({
-            success: true,
-            message: 'Scraping completado exitosamente',
-            data: {
-                tipo: extractedData.tipo,
-                total: extractedData.tipo === 'comunicados_estructurados' ? extractedData.total : 'contenido_general',
-                webhook_status: webhookResponse.status
-            }
+            status: 'success',
+            message: 'Proceso de scraping completado y datos enviados al webhook.',
+            dataLength: pageContent.length
         });
-        
+
     } catch (error) {
-        console.error('❌ Error durante el proceso de scraping:', error.message);
-        
-        // Cerrar el navegador si está abierto
-        if (browser) {
-            try {
-                await browser.close();
-                console.log('🔒 Navegador cerrado después del error');
-            } catch (closeError) {
-                console.error('Error al cerrar el navegador:', closeError.message);
-            }
-        }
-        
-        // Responder con error
+        // Manejo de errores
+        console.error('Ha ocurrido un error durante el proceso:', error);
         res.status(500).json({
-            success: false,
-            message: 'Error durante el proceso de scraping',
-            error: error.message
+            status: 'error',
+            message: 'Falló el proceso de scraping.',
+            error: error.message,
         });
+
+    } finally {
+        // 6. Cerrar el navegador
+        // Es crucial cerrar el navegador para liberar recursos, incluso si hay un error.
+        if (browser) {
+            console.log('Cerrando el navegador Puppeteer...');
+            await browser.close();
+            console.log('Navegador cerrado.');
+        }
     }
-});
-
-// Endpoint de salud
-app.get('/health', (req, res) => {
-    res.status(200).json({
-        status: 'OK',
-        timestamp: new Date().toISOString(),
-        service: 'Scraper Corte Constitucional'
-    });
-});
-
-// Manejar rutas no encontradas
-app.use('*', (req, res) => {
-    res.status(404).json({
-        success: false,
-        message: 'Endpoint no encontrado. Use GET / para iniciar el scraping.'
-    });
 });
 
 // Iniciar el servidor
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor iniciado en el puerto ${PORT}`);
-    console.log(`📋 Endpoints disponibles:`);
-    console.log(`   - GET / : Iniciar scraping`);
-    console.log(`   - GET /health : Verificar estado del servicio`);
+    console.log(`Servidor de scraping escuchando en el puerto ${PORT}`);
 });
-
-// Manejar señales de terminación
-process.on('SIGTERM', () => {
-    console.log('🛑 Recibida señal SIGTERM, cerrando servidor...');
-    process.exit(0);
-});
-
-process.on('SIGINT', () => {
-    console.log('🛑 Recibida señal SIGINT, cerrando servidor...');
-    process.exit(0);
-}); 
