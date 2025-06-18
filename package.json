@@ -1,0 +1,11 @@
+{
+  "name": "scraper-corte",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node scraper.js"
+  },
+  "dependencies": {
+    "puppeteer": "^21.3.8",
+    "axios": "^1.6.7"
+  }
+} 
