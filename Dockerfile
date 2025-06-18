@@ -1,48 +1,31 @@
-# Usar imagen base oficial de Node.js
+# Dockerfile
+
+# Paso 1: Usar una imagen base oficial de Node.js.
+# La versión 20 es una LTS (Long-Term Support) estable y moderna.
 FROM node:20-slim
 
-# Instalar dependencias del sistema necesarias para Puppeteer
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
-    ca-certificates \
-    procps \
-    libxss1 \
-    libgbm-dev \
-    libnss3 \
-    libatk-bridge2.0-0 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libasound2 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libatspi2.0-0 \
-    libgtk-3-0 \
-    libxshmfence1 \
-    libx11-xcb1 \
-    libxcb-dri3-0 \
-    libxcb1 \
-    libxext6 \
-    libxfixes3 \
-    libxrender1 \
-    libxtst6 \
-    libglib2.0-0 \
-    libdbus-1-3 \
+# Establecer el directorio de trabajo dentro del contenedor.
+WORKDIR /usr/src/app
+
+# Instalar las dependencias del sistema operativo necesarias para que Puppeteer (Chromium) se ejecute.
+# Este es el paso más importante y el que suele fallar en despliegues.
+# La lista incluye librerías para renderizado, fuentes, y utilidades de red.
+RUN apt-get update \
+    && apt-get install -yq --no-install-recommends \
+    gconf-service \
     libasound2 \
     libatk1.0-0 \
     libcups2 \
     libdbus-1-3 \
     libexpat1 \
     libfontconfig1 \
-    libfreetype6 \
     libgcc1 \
+    libgconf-2-4 \
+    libgdk-pixbuf2.0-0 \
     libglib2.0-0 \
+
     libgtk-3-0 \
     libnspr4 \
-    libnss3 \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
     libstdc++6 \
@@ -59,37 +42,30 @@ RUN apt-get update && apt-get install -y \
     libxrender1 \
     libxss1 \
     libxtst6 \
-    xdg-utils \
+    ca-certificates \
     fonts-liberation \
+    libnss3 \
+    lsb-release \
+    xdg-utils \
+    wget \
+    # Limpiar el caché de apt para reducir el tamaño de la imagen
     && rm -rf /var/lib/apt/lists/*
 
-# Crear directorio de trabajo
-WORKDIR /app
-
-# Copiar package.json y package-lock.json (si existe)
+# Copiar los archivos de definición del proyecto (package.json y package-lock.json).
+# Esto aprovecha el cacheo de capas de Docker. Si estos archivos no cambian,
+# no se volverán a instalar las dependencias.
 COPY package*.json ./
 
-# Instalar dependencias de npm
-RUN npm ci --only=production && npm cache clean --force
+# Instalar las dependencias de Node.js.
+# Puppeteer descargará su propia versión de Chromium aquí.
+RUN npm install
 
-# Copiar el código de la aplicación
+# Copiar el resto del código de la aplicación.
 COPY . .
 
-# Crear usuario no-root para seguridad
-RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
-    && mkdir -p /home/pptruser/Downloads \
-    && chown -R pptruser:pptruser /home/pptruser \
-    && chown -R pptruser:pptruser /app
-
-# Cambiar al usuario no-root
-USER pptruser
-
-# Exponer el puerto
+# Exponer el puerto que la aplicación usará.
+# Google Cloud Run dirigirá el tráfico a este puerto.
 EXPOSE 8080
 
-# Variables de entorno para Puppeteer
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
-
-# Comando de inicio
-CMD ["npm", "start"] 
+# Definir el comando para ejecutar la aplicación cuando se inicie el contenedor.
+CMD [ "npm", "start" ]
