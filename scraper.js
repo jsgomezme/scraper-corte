@@ -1,15 +1,15 @@
 const puppeteer = require('puppeteer');
 const axios = require('axios');
 const express = require('express');
+const fs = require('fs'); // Necesario para guardar archivos
+const path = require('path'); // Necesario para manejar rutas
 
 const app = express();
 const port = process.env.PORT || 8080;
-
-// URL del Webhook de n8n
 const WEBHOOK_URL = 'https://lab.irradialab.com/webhook/recibir-comunicados';
 
 app.get('/', async (req, res) => {
-  console.log('--- INICIANDO SCRAPER DE DIAGNÓSTICO ---');
+  console.log('--- INICIANDO SCRAPER CON CAPTURA DE PANTALLA ---');
   let browser = null;
 
   try {
@@ -22,6 +22,8 @@ app.get('/', async (req, res) => {
     console.log('✅ Navegador iniciado.');
 
     const page = await browser.newPage();
+    // Aumentar el tamaño de la ventana para capturar más contenido
+    await page.setViewport({ width: 1280, height: 1024 });
 
     // 2. IR A LA PÁGINA
     console.log('[2/5] Navegando a la página...');
@@ -30,63 +32,47 @@ app.get('/', async (req, res) => {
       timeout: 60000
     });
     console.log('✅ Página cargada.');
-
-    // 3. ENCONTRAR Y CONTAR LAS FILAS
-    const selectorFilas = '#tabla-resultado tbody tr';
-    console.log(`[3/5] Buscando selector: "${selectorFilas}"`);
     
-    // Esperamos a que el selector esté presente en la página.
-    // Si esto falla, el log mostrará un error de timeout.
-    await page.waitForSelector(selectorFilas, { timeout: 30000 });
-    
-    // Contamos los elementos.
-    const numeroDeFilas = await page.$$eval(selectorFilas, filas => filas.length);
-    console.log(`✅ Selector encontrado. Número de filas: ${numeroDeFilas}`);
+    // 3. TOMAR CAPTURA DE PANTALLA
+    // En Cloud Run, solo podemos escribir en el directorio /tmp
+    const screenshotPath = path.join('/tmp', 'screenshot.png');
+    console.log(`[3/5] Tomando captura de pantalla en: ${screenshotPath}`);
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    console.log('✅ Captura de pantalla guardada.');
 
-    // 4. CERRAR NAVEGADOR
-    console.log('[4/5] Cerrando navegador...');
+    // 4. EXTRAER CONTENIDO DE TEXTO PLANO (el método que sabemos que funciona)
+    console.log('[4/5] Extrayendo contenido de texto plano...');
+    const contenidoPlano = await page.evaluate(() => document.body.innerText || '');
+    console.log(`✅ Texto extraído. Longitud: ${contenidoPlano.length}`);
+
+    // 5. CERRAR NAVEGADOR
     await browser.close();
     console.log('✅ Navegador cerrado.');
     
-    // 5. ENVIAR RESULTADO A N8N
+    // ENVIAR RESULTADO A N8N
     const datosAEnviar = {
-      diagnostico: 'OK',
-      filasEncontradas: numeroDeFilas,
+      diagnostico: 'CAPTURA_Y_TEXTO',
+      longitudContenido: contenidoPlano.length,
+      // Incluir solo una parte del texto para no sobrecargar el log/webhook
+      previewContenido: contenidoPlano.substring(0, 500), 
       timestamp: new Date().toISOString()
     };
     
     console.log(`[5/5] Enviando datos a n8n: ${JSON.stringify(datosAEnviar)}`);
-    
     await axios.post(WEBHOOK_URL, datosAEnviar, { timeout: 20000 });
     
     console.log('✅ Envío a n8n exitoso.');
-    res.status(200).send(`Diagnóstico completado. Se encontraron ${numeroDeFilas} filas y se notificó a n8n.`);
+    // No podemos enviar la imagen directamente en la respuesta, pero el log lo confirma.
+    res.status(200).send(`Diagnóstico con captura completado. Se extrajo texto y se notificó a n8n.`);
 
   } catch (error) {
     console.error('--- ERROR EN EL PROCESO ---');
     console.error('Mensaje de error:', error.message);
-    
-    if (browser) {
-      await browser.close();
-      console.log('✅ Navegador cerrado después de error.');
-    }
-
-    // Intentar enviar el error a n8n para tener visibilidad
-    try {
-      await axios.post(WEBHOOK_URL, {
-        diagnostico: 'ERROR',
-        error: error.message,
-        timestamp: new Date().toISOString()
-      }, { timeout: 10000 });
-      console.log('✅ Notificación de error enviada a n8n.');
-    } catch (axiosError) {
-      console.error('❌ Falló el envío de la notificación de error a n8n:', axiosError.message);
-    }
-
+    if (browser) await browser.close();
     res.status(500).send(`Error durante el diagnóstico: ${error.message}`);
   }
 });
 
 app.listen(port, () => {
-  console.log(`Servidor de diagnóstico escuchando en puerto ${port}`);
+  console.log(`Servidor de diagnóstico (con captura) escuchando en puerto ${port}`);
 });
