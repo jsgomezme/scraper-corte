@@ -1,7 +1,7 @@
 const puppeteer = require('puppeteer');
 const axios = require('axios');
 
-const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://lab.irradialab.com/webhook/recibir-comunicados';
+const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://lab.irradialab.com/webhook-test/recibir-comunicados';
 
 (async () => {
   const browser = await puppeteer.launch({
