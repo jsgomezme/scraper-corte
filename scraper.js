@@ -8,173 +8,85 @@ const port = process.env.PORT || 8080;
 // URL del Webhook de n8n
 const WEBHOOK_URL = 'https://lab.irradialab.com/webhook/recibir-comunicados';
 
-// Endpoint de salud para verificar que el servicio funciona
-app.get('/health', (req, res) => {
-  console.log('🏥 Health check ejecutado');
-  res.status(200).json({
-    status: 'OK',
-    timestamp: new Date().toISOString(),
-    service: 'scraper-corte-constitucional',
-    webhook_url_configured: !!WEBHOOK_URL
-  });
-});
-
-// Endpoint de prueba para verificar el webhook
-app.get('/test', async (req, res) => {
-  console.log('🧪 Probando webhook...');
-  try {
-    const testData = {
-      test: true,
-      message: 'Prueba desde Cloud Run',
-      timestamp: new Date().toISOString(),
-      comunicados: [
-        {
-          titulo: 'Comunicado de prueba',
-          publicado: '2024-01-01 12:00:00',
-          documentoUrl: 'https://ejemplo.com/test.pdf'
-        }
-      ]
-    };
-
-    console.log('📤 Enviando datos de prueba:', JSON.stringify(testData, null, 2));
-    
-    const response = await axios.post(WEBHOOK_URL, testData, {
-      timeout: 10000,
-      headers: { 'Content-Type': 'application/json' }
-    });
-
-    console.log(`✅ Prueba exitosa - Status: ${response.status}`);
-    res.status(200).json({
-      success: true,
-      status: response.status,
-      message: 'Webhook funcionando correctamente'
-    });
-  } catch (error) {
-    console.error('❌ Error en prueba:', error.message);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      message: 'Error al conectar con el webhook. Verifica la URL y la conectividad.'
-    });
-  }
-});
-
-// Endpoint principal - Scraping de comunicados
 app.get('/', async (req, res) => {
-  console.log('🚀 Iniciando scraping de comunicados...');
-  console.log('🕐 Timestamp:', new Date().toISOString());
-  
+  console.log('--- INICIANDO SCRAPER DE DIAGNÓSTICO ---');
   let browser = null;
-  
+
   try {
-    // 1. Configurar navegador
+    // 1. INICIAR NAVEGADOR
+    console.log('[1/5] Iniciando Puppeteer...');
     browser = await puppeteer.launch({
       headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu'
-      ]
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
     });
-    console.log('✅ Navegador iniciado');
+    console.log('✅ Navegador iniciado.');
 
     const page = await browser.newPage();
-    console.log('✅ Página creada');
 
-    // 2. Navegar a la página
-    console.log('🌐 Navegando a https://www.corteconstitucional.gov.co/comunicados');
+    // 2. IR A LA PÁGINA
+    console.log('[2/5] Navegando a la página...');
     await page.goto('https://www.corteconstitucional.gov.co/comunicados', {
       waitUntil: 'networkidle0',
       timeout: 60000
     });
-    console.log('✅ Página cargada');
+    console.log('✅ Página cargada.');
 
-    // 3. Usar el selector específico y esperar a que esté disponible
+    // 3. ENCONTRAR Y CONTAR LAS FILAS
     const selectorFilas = '#tabla-resultado tbody tr';
-    console.log(`🔍 Esperando por el selector: "${selectorFilas}"`);
+    console.log(`[3/5] Buscando selector: "${selectorFilas}"`);
+    
+    // Esperamos a que el selector esté presente en la página.
+    // Si esto falla, el log mostrará un error de timeout.
     await page.waitForSelector(selectorFilas, { timeout: 30000 });
-    console.log('✅ Selector encontrado en la página.');
-
-    // 4. Extraer los datos de forma estructurada
-    const comunicados = await page.evaluate((selector) => {
-        const filas = Array.from(document.querySelectorAll(selector));
-        
-        return filas.map((fila) => {
-          const celdas = fila.querySelectorAll('td');
-          if (celdas.length >= 3) {
-            const titulo = celdas[0]?.innerText?.trim() || '';
-            const publicado = celdas[1]?.innerText?.trim() || '';
-            const documentoUrl = celdas[2]?.querySelector('a')?.href || null;
-            
-            return {
-              titulo: titulo,
-              publicado: publicado,
-              documentoUrl: documentoUrl
-            };
-          }
-          return null;
-        }).filter(item => item && item.titulo);
-    }, selectorFilas);
-
-    console.log(`📊 Se extrajeron ${comunicados.length} comunicados.`);
     
-    // 5. Cerrar el navegador TAN PRONTO como ya no se necesite
+    // Contamos los elementos.
+    const numeroDeFilas = await page.$$eval(selectorFilas, filas => filas.length);
+    console.log(`✅ Selector encontrado. Número de filas: ${numeroDeFilas}`);
+
+    // 4. CERRAR NAVEGADOR
+    console.log('[4/5] Cerrando navegador...');
     await browser.close();
-    console.log('✅ Navegador cerrado');
-
-    if (comunicados.length === 0) {
-      console.warn('⚠️ No se encontraron comunicados. El proceso termina aquí.');
-      return res.status(200).json({
-          success: true,
-          message: 'Scraping completado, pero no se encontraron comunicados para enviar.',
-          cantidad: 0
-      });
-    }
-
-    // 6. Preparar y enviar los datos
+    console.log('✅ Navegador cerrado.');
+    
+    // 5. ENVIAR RESULTADO A N8N
     const datosAEnviar = {
-      comunicados: comunicados,
-      timestamp: new Date().toISOString(),
-      cantidad: comunicados.length,
-      source: 'Corte Constitucional Colombia Scraper',
-      url: 'https://www.corteconstitucional.gov.co/comunicados'
+      diagnostico: 'OK',
+      filasEncontradas: numeroDeFilas,
+      timestamp: new Date().toISOString()
     };
-
-    console.log(`📤 Enviando ${datosAEnviar.cantidad} comunicados a n8n...`);
     
-    const response = await axios.post(WEBHOOK_URL, datosAEnviar, {
-      timeout: 30000,
-      headers: { 'Content-Type': 'application/json' }
-    });
-
-    console.log(`✅ Envío exitoso a n8n - Status: ${response.status}`);
+    console.log(`[5/5] Enviando datos a n8n: ${JSON.stringify(datosAEnviar)}`);
     
-    res.status(200).json({
-      success: true,
-      message: `Scraping completado. ${datosAEnviar.cantidad} comunicados enviados a n8n.`,
-      data: datosAEnviar
-    });
+    await axios.post(WEBHOOK_URL, datosAEnviar, { timeout: 20000 });
+    
+    console.log('✅ Envío a n8n exitoso.');
+    res.status(200).send(`Diagnóstico completado. Se encontraron ${numeroDeFilas} filas y se notificó a n8n.`);
 
   } catch (error) {
-    console.error('❌ Error fatal durante el scraping:', error.message);
+    console.error('--- ERROR EN EL PROCESO ---');
+    console.error('Mensaje de error:', error.message);
+    
     if (browser) {
       await browser.close();
       console.log('✅ Navegador cerrado después de error.');
     }
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+
+    // Intentar enviar el error a n8n para tener visibilidad
+    try {
+      await axios.post(WEBHOOK_URL, {
+        diagnostico: 'ERROR',
+        error: error.message,
+        timestamp: new Date().toISOString()
+      }, { timeout: 10000 });
+      console.log('✅ Notificación de error enviada a n8n.');
+    } catch (axiosError) {
+      console.error('❌ Falló el envío de la notificación de error a n8n:', axiosError.message);
+    }
+
+    res.status(500).send(`Error durante el diagnóstico: ${error.message}`);
   }
 });
 
-// Iniciar servidor
 app.listen(port, () => {
-  console.log(`🚀 Servidor iniciado en puerto ${port}`);
-  console.log(`🌐 Webhook configurado: ${WEBHOOK_URL}`);
-  console.log(`📋 Endpoints disponibles:`);
-  console.log(`   - GET /health (verificar servicio)`);
-  console.log(`   - GET /test (probar webhook)`);
-  console.log(`   - GET / (iniciar scraping)`);
+  console.log(`Servidor de diagnóstico escuchando en puerto ${port}`);
 });
