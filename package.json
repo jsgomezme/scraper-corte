@@ -1,12 +1,26 @@
 {
-  "name": "scraper-corte",
+  "name": "scraper-corte-constitucional",
   "version": "1.0.0",
+  "description": "Web scraper para la Corte Constitucional de Colombia",
+  "main": "scraper.js",
   "scripts": {
-    "start": "node scraper.js"
+    "start": "node scraper.js",
+    "dev": "node scraper.js"
   },
   "dependencies": {
-    "puppeteer": "^21.3.8",
-    "axios": "^1.6.7",
-    "express": "^4.18.2"
-  }
+    "express": "^4.18.2",
+    "puppeteer": "^21.5.2",
+    "axios": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "scraping",
+    "puppeteer",
+    "corte-constitucional",
+    "colombia"
+  ],
+  "author": "",
+  "license": "MIT"
 } 
